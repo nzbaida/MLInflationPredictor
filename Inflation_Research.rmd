@@ -1,0 +1,714 @@
+---
+title: "Inflation Research"
+author: "Nathaniel Zbaida"
+date: "1/21/2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r import data, echo=FALSE}
+rm(list = ls())
+setwd("C:/Users/natty/OneDrive/Documents/Inflation Research")
+data1 <- read.csv("DataSet.csv", stringsAsFactors = FALSE)
+data1 <- data1[1:682,]
+names(data1)[1] <- "Dates"
+```
+  
+Inflation numbers are adjusted 12 months ahead of the unemployment numbers.
+```{r phillips curve, echo=FALSE}
+unemployment <- data1$UNRATENSA
+FutureInflation <- data1$FutureInflation
+dates <- as.Date(data1$Dates, "%m/%d/%Y")
+```
+  
+We will split the data into learning and testing data as follows.
+```{r splitting the data, echo=FALSE}
+trainingData1 <- data1[1:565,]
+testingData1 <- data1[566:682,]
+```
+
+```{r phillips lasso, echo=FALSE}
+library(glmnet)
+require(glmnet)
+```
+  
+
+```{r phillips predicted vs actual, echo=FALSE}
+library(ggplot2)
+require(ggplot2)
+```
+  
+```{r rf phillips, echo=FALSE}
+library(randomForest)
+require(randomForest)
+```
+
+```{r phillips neural net, echo=FALSE}
+library(neuralnet)
+``` 
+  
+Adding Nonlinear Columns
+```{r nonlinear columns, echo=FALSE}
+temp <- data1[,-c(1,6,8,12,14,16,18,20,22,24,26)]
+#without DJIA, median house price 
+#closing price only
+temp1 <- temp[,-c(7,10:16,30)]
+temp1[,5] <- as.numeric(temp1[,5])
+temp1[,8] <- as.numeric(temp1[,8])
+names(temp1)
+nonlinearRHS1 <- poly(as.matrix(temp1[,-11]), degree = 3, raw = TRUE)
+count <- 0
+for (i in 1:ncol(nonlinearRHS1)) {
+  if(all(is.na(nonlinearRHS1[,i]) == TRUE)){
+    count <- count + 1
+ }
+}
+naLOC <- rep(0, count)
+j <- 1
+for (i in 1:ncol(nonlinearRHS1)) {
+  if(all(is.na(nonlinearRHS1[,i])) == TRUE){
+    naLOC[j] <- i
+    j <- j + 1
+  }
+}
+```
+  
+Quarterly Frequency LASSO Prediction without DJIA (mean house price and closing prices)
+```{r quarterly no DJI, echo=FALSE}
+#quarterly frequency
+nonlinearRHS2 <- matrix(nrow = nrow(nonlinearRHS1)/3 + 1, ncol = ncol(nonlinearRHS1))
+nonNArows <- rep(NA, nrow(nonlinearRHS1))
+j <- 1
+for (i in 1:nrow(nonlinearRHS1)) {
+ if(all(is.na(nonlinearRHS1[i,]) == FALSE)){
+    nonlinearRHS2[j,] <- nonlinearRHS1[i,]
+    nonNArows[i] <- i
+    j <- j + 1
+  }
+}
+nonlinearRHS2 <- nonlinearRHS1[is.na(nonNArows) == FALSE,]
+quarterlyFutureInflation <- data1$FutureInflation[is.na(nonNArows) == FALSE]
+quarterlyDates <- dates[is.na(nonNArows) == FALSE]
+```
+
+Quarterly LASSO no DJIA
+```{r quarterly no DJI LASSO, echo=FALSE}
+set.seed(420)
+xTrain <- nonlinearRHS2[1:208,]
+yTrain <- quarterlyFutureInflation[1:208]
+CV2 <- cv.glmnet(x = xTrain, y = yTrain, type.measure = "default", alpha = 1,nlambda = 100)
+lambda_best2 <- CV2$lambda.min 
+lasso_model2 <- glmnet(xTrain, yTrain, alpha = 1, lambda = lambda_best2, standardize = TRUE)
+lassoPredFutureInflation2 <- coef(lasso_model2)[1] + coef(lasso_model2)[38]*nonlinearRHS2[209:nrow(nonlinearRHS2),37]+ coef(lasso_model2)[43]*nonlinearRHS2[209:nrow(nonlinearRHS2),42]+  coef(lasso_model2)[85]*nonlinearRHS2[209:nrow(nonlinearRHS2),84]+ coef(lasso_model2)[110]*nonlinearRHS2[209:nrow(nonlinearRHS2),109]+ coef(lasso_model2)[112]*nonlinearRHS2[209:nrow(nonlinearRHS2),111]+ coef(lasso_model2)[113]*nonlinearRHS2[209:nrow(nonlinearRHS2),112]+ coef(lasso_model2)[160]*nonlinearRHS2[209:nrow(nonlinearRHS2),159]+ coef(lasso_model2)[166]*nonlinearRHS2[209:nrow(nonlinearRHS2),165]+ coef(lasso_model2)[248]*nonlinearRHS2[209:nrow(nonlinearRHS2),247]
+lassoPredFutureInflation2 <- lassoPredFutureInflation2[is.na(lassoPredFutureInflation2) == FALSE]
+predDiff5 <- quarterlyFutureInflation[209:length(quarterlyFutureInflation)] - lassoPredFutureInflation2
+predDiff5 <- predDiff5[is.na(predDiff5) == FALSE]
+plot(quarterlyDates[209:length(quarterlyFutureInflation)], quarterlyFutureInflation[209:length(quarterlyFutureInflation)], main = "Predicted VS Actual Inflation Quarterly 
+Frequency without DJI LASSO", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(quarterlyDates[209:length(quarterlyFutureInflation)], lassoPredFutureInflation2, pch = 8, col = "red")
+mse5 <- sum(predDiff5^2)/20
+rmse5 <- sqrt(mse5)
+mae5 <- sum(abs(predDiff5))/20
+sMSE5 <- mean(predDiff5^2)/var(quarterlyFutureInflation[209:length(quarterlyFutureInflation)])
+results5 <- c("MSE" = mse5, "RMSE" = rmse5, "MAE" = mae5, "scaled MSE" = sMSE5)
+results5
+```
+  
+Quarterly Random Forest Prediction without DJIA (mean house price and closing prices)
+```{r quarterly random forest, echo=FALSE}
+#without Median House Price or DJIA
+#closing prices only
+set.seed(420)
+temp2 <- temp[is.na(nonNArows) == FALSE,]
+trainingData2 <- temp2[1:208,]
+testingData2 <- temp2[209:nrow(temp2),]
+rf2 <- randomForest(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange, data = trainingData2, mty = 1, na.action = na.omit)
+quarterlyRF <- predict(rf2, newdata = testingData2, type = "response")
+quarterlyRF <- as.numeric(quarterlyRF)
+predDiff6 <- quarterlyFutureInflation[209:length(quarterlyFutureInflation)] - quarterlyRF
+predDiff6 <- predDiff6[is.na(predDiff6) == FALSE]
+plot(quarterlyDates[209:length(quarterlyFutureInflation)],
+quarterlyFutureInflation[209:length(quarterlyFutureInflation)], main = "Predicted VS Actual Inflation Quarterly 
+Frequency without DJI Random Forest", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(quarterlyDates[209:length(quarterlyFutureInflation)], quarterlyRF, pch = 8, col = "red")
+mse6 <- sum(predDiff6^2)/20
+rmse6 <- sqrt(mse6)
+mae6 <- sum(abs(predDiff6))/20
+sMSE6 <- mean(predDiff6^2)/var(quarterlyFutureInflation[209:length(quarterlyFutureInflation)])
+results6 <- c("MSE" = mse6, "RMSE" = rmse6, "MAE" = mae6, "scaled MSE" = sMSE6)
+results6
+```
+  
+Quarterly Neural Net Prediction without DJIA (mean house price and closing prices)
+```{r quarterly neural net, echo=FALSE}
+set.seed(420)
+trainingData2$GoldPriceChange <- as.numeric(trainingData2$GoldPriceChange)
+trainingData2$SP500ClosingChange <- as.numeric(trainingData2$SP500ClosingChange)
+trainingData2$SP500OpenChange <- as.numeric(trainingData2$SP500OpenChange)
+trainingData2$SP500HighChange <- as.numeric(trainingData2$SP500HighChange)
+trainingData2$SP500LowChange <- as.numeric(trainingData2$SP500LowChange)
+trainingData2$DJIA_closingChange <- as.numeric(trainingData2$DJIA_closingChange)
+trainingData2$DJIA_openChange <- as.numeric(trainingData2$DJIA_openChange)
+trainingData2$DJIA_highChange <- as.numeric(trainingData2$DJIA_highChange)
+trainingData2$DJIA_lowChange <- as.numeric(trainingData2$DJIA_lowChange)
+testingData2$GoldPriceChange <- as.numeric(testingData2$GoldPriceChange)
+testingData2$SP500ClosingChange <- as.numeric(testingData2$SP500ClosingChange)
+testingData2$SP500OpenChange <- as.numeric(testingData2$SP500OpenChange)
+testingData2$SP500HighChange <- as.numeric(testingData2$SP500HighChange)
+testingData2$SP500LowChange <- as.numeric(testingData2$SP500LowChange)
+testingData2$DJIA_closingChange <- as.numeric(testingData2$DJIA_closingChange)
+testingData2$DJIA_openChange <- as.numeric(testingData2$DJIA_openChange)
+testingData2$DJIA_highChange <- as.numeric(testingData2$DJIA_highChange)
+testingData2$DJIA_lowChange <- as.numeric(testingData2$DJIA_lowChange)
+trainingData2 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange, data = trainingData2)
+testingData2 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange, data = testingData2)
+ANN2 <- neuralnet(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange,hidden=5, data = trainingData2)
+quarterlyNeural <- compute(ANN2, testingData2[,c("CurrentInflation", "YieldDifference", "UNRATENSA", "TB6MS", "TB3MS", "GoldPriceChange", "SP500ClosingChange")])
+predDiff7 <- quarterlyFutureInflation[209:length(quarterlyFutureInflation)] - quarterlyNeural$net.result
+predDiff7 <- predDiff7[is.na(predDiff7) == FALSE]
+plot(quarterlyDates[209:length(quarterlyFutureInflation)], quarterlyFutureInflation[209:length(quarterlyFutureInflation)], main = "Predicted VS Actual Inflation Quarterly 
+Frequency without DJI Neural Network", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(quarterlyDates[209:length(quarterlyFutureInflation)], quarterlyNeural$net.result, pch = 8, col = "red")
+mse7 <- sum(predDiff7^2)/20
+rmse7 <- sqrt(mse7)
+mae7 <- sum(abs(predDiff7))/20
+sMSE7 <- mean(predDiff7^2)/var(quarterlyFutureInflation[209:length(quarterlyFutureInflation)])
+results7 <- c("MSE" = mse7, "RMSE" = rmse7, "MAE" = mae7, "scaled MSE" = sMSE7)
+results7
+```
+  
+Super Learner Quarterly without DJIA (mean house price and closing prices)
+```{r super learner quarterly, echo=FALSE}
+data3 <- as.data.frame(testingData2)
+data3$LASSO <- as.numeric(lassoPredFutureInflation2)
+data3$RF <- as.numeric(quarterlyRF)
+data3$NN <- as.numeric(quarterlyNeural$net.result)
+secondSuperLearnerTrainer <- data3[1:20,]
+secondSuperLearnerTest <- data3[21:nrow(data3),]
+secondSuper <- lm(FutureInflation ~ LASSO + RF + NN, data = secondSuperLearnerTest, na.action = na.omit)
+secondSuperSum <- summary(secondSuper)
+secondSuperResult <- secondSuperSum$coefficient[1,1] * rep(1, nrow(data3))
+predDiff8 <- quarterlyFutureInflation[209:length(quarterlyFutureInflation)] - secondSuperResult
+plot(quarterlyDates[209:length(quarterlyDates)], quarterlyFutureInflation[209:length(quarterlyFutureInflation)], main = "Predicted VS Actual Inflation Quarterly 
+    Super Learner", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(quarterlyDates[209:length(quarterlyDates)], secondSuperResult, pch = 8, col = "red")
+mse8 <- sum(predDiff8^2)/20
+rmse8 <- sqrt(mse8)
+mae8 <- sum(abs(predDiff8))/20
+sMSE8 <- mean(predDiff8^2)/var(quarterlyFutureInflation[209:length(quarterlyFutureInflation)])
+results8 <- c("MSE" = mse8, "RMSE" = rmse8, "MAE" = mae8, "scaled MSE" = sMSE8)
+results8
+```
+
+linear approximation of monthly mean house prices
+```{r linear approximation, echo=FALSE}
+indices <- seq(from = 1, to = 681, by = 3)
+for (i in indices) {
+  difference <- temp$MeanHousePrice[i+3]-temp$MeanHousePrice[i]
+  temp$MeanHousePrice[i+1] <- temp$MeanHousePrice[i] + difference/3
+  temp$MeanHousePrice[i+2] <- temp$MeanHousePrice[i] + 2*difference/3
+}
+```
+
+adding nonlinear columns
+```{r nonlinear columns 2, echo=FALSE}
+temp3 <- temp[,-c(7,10:16)]
+temp3$GoldPriceChange <- as.numeric(temp3$GoldPriceChange)
+temp3$SP500ClosingChange <- as.numeric(temp3$SP500ClosingChange)
+nonlinearRHS3 <- poly(as.matrix(temp3[,-11]), degree = 3, raw = TRUE)
+```
+
+Monthly LASSO no DJIA
+```{r monthly LASSO no DJIA, echo=FALSE}
+set.seed(420)
+xTrain2 <- nonlinearRHS3[1:625,]
+yTrain2 <- FutureInflation[1:625]
+CV3 <- cv.glmnet(x = xTrain2, y = yTrain2, type.measure = "default", alpha = 1,nlambda = 100)
+lambda_best3 <- CV3$lambda.min 
+lasso_model3 <- glmnet(xTrain2, yTrain2, alpha = 1, lambda = lambda_best2, standardize = TRUE)
+lassoPredFutureInflation3 <- coef(lasso_model3)[1] +  coef(lasso_model3)[43]*nonlinearRHS3[626:nrow(nonlinearRHS3),42]+
+coef(lasso_model3)[69]*nonlinearRHS3[626:nrow(nonlinearRHS3),68]+
+coef(lasso_model3)[85]*nonlinearRHS3[626:nrow(nonlinearRHS3),84]+  coef(lasso_model3)[112]*nonlinearRHS3[626:nrow(nonlinearRHS3),111]+ coef(lasso_model3)[113]*nonlinearRHS3[626:nrow(nonlinearRHS3),112]+  coef(lasso_model3)[166]*nonlinearRHS3[626:nrow(nonlinearRHS3),165]+
+coef(lasso_model3)[194]*nonlinearRHS3[626:nrow(nonlinearRHS3),193]+
+coef(lasso_model3)[248]*nonlinearRHS3[626:nrow(nonlinearRHS3),247]
+lassoPredFutureInflation3 <- lassoPredFutureInflation3[is.na(lassoPredFutureInflation3) == FALSE]
+predDiff9 <- FutureInflation[626:length(FutureInflation)] - lassoPredFutureInflation3
+predDiff9 <- predDiff9[is.na(predDiff9) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency without DJI LASSO", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], lassoPredFutureInflation3, pch = 8, col = "red")
+mse9 <- sum(predDiff9^2)/57
+rmse9 <- sqrt(mse9)
+mae9 <- sum(abs(predDiff9))/57
+sMSE9 <- mean(predDiff9^2)/var(FutureInflation[626:length(FutureInflation)])
+results9 <- c("MSE" = mse9, "RMSE" = rmse9, "MAE" = mae9, "scaled MSE" = sMSE9)
+results9
+```
+
+Monthly Random Forest without DJIA
+```{r monthly random forest, echo=FALSE}
+set.seed(420)
+trainingData3 <- temp3[1:625,]
+testingData3 <- temp3[626:nrow(temp3),]
+rf3 <- randomForest(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + TB6MS + SP500ClosingChange, data = trainingData3, mty = 1, na.action = na.omit)
+monthlyRF <- predict(rf3, newdata = testingData3, type = "response")
+monthlyRF <- as.numeric(monthlyRF)
+predDiff10 <- FutureInflation[626:length(FutureInflation)] - monthlyRF
+predDiff10 <- predDiff10[is.na(predDiff10) == FALSE]
+plot(dates[626:length(FutureInflation)],FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency without DJI Random Forest", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyRF, pch = 8, col = "red")
+mse10 <- sum(predDiff10^2)/57
+rmse10 <- sqrt(mse10)
+mae10 <- sum(abs(predDiff10))/57
+sMSE10 <- mean(predDiff10^2)/var(FutureInflation[626:length(FutureInflation)])
+results10 <- c("MSE" = mse10, "RMSE" = rmse10, "MAE" = mae10, "scaled MSE" = sMSE10)
+results10
+```
+
+Monthly Neural Network without DJIA
+```{r monthly neural network, echo=FALSE}
+set.seed(420)
+trainingData3 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange, data = trainingData3)
+testingData3 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange, data = testingData3)
+ANN3 <- neuralnet(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + SP500ClosingChange,hidden = 5, data = trainingData3)
+monthlyNeural <- compute(ANN3, testingData3[,c("CurrentInflation", "YieldDifference", "UNRATENSA", "TB6MS", "TB3MS", "GoldPriceChange", "SP500ClosingChange")])
+predDiff11 <- FutureInflation[626:length(FutureInflation)] - monthlyNeural$net.result
+predDiff11 <- predDiff11[is.na(predDiff11) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency without DJI Neural Network", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyNeural$net.result, pch = 8, col = "red")
+mse11 <- sum(predDiff11^2)/57
+rmse11 <- sqrt(mse11)
+mae11 <- sum(abs(predDiff11))/57
+sMSE11 <- mean(predDiff11^2)/var(FutureInflation[626:length(FutureInflation)])
+results11 <- c("MSE" = mse11, "RMSE" = rmse11, "MAE" = mae11, "scaled MSE" = sMSE11)
+results11
+```
+
+Monthly Super Learner
+```{r monthly super learner, echo=FALSE}
+data4 <- as.data.frame(testingData3)
+data4$LASSO <- as.numeric(lassoPredFutureInflation3)
+data4$RF <- as.numeric(monthlyRF)
+data4$NN <- as.numeric(monthlyNeural$net.result)
+thirdSuperLearnerTest <- data4
+thirdSuper <- lm(FutureInflation ~ LASSO + RF + NN, data = thirdSuperLearnerTest, na.action = na.omit)
+thirdSuperSum <- summary(thirdSuper)
+thirdSuperResult <- thirdSuperSum$coefficient[1,1] + thirdSuperSum$coefficient[2,1]*data4$LASSO + thirdSuperSum$coefficient[3,1]*data4$RF + thirdSuperSum$coefficient[4,1]*data4$NN
+predDiff12 <- FutureInflation[626:length(FutureInflation)] - thirdSuperResult
+plot(dates[626:length(dates)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+    Super Learner", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(dates)], thirdSuperResult, pch = 8, col = "red")
+mse12 <- sum(predDiff12^2)/57
+rmse12 <- sqrt(mse12)
+mae12 <- sum(abs(predDiff12))/57
+sMSE12 <- mean(predDiff12^2/var(FutureInflation[626:length(FutureInflation)]))
+results12 <- c("MSE" = mse12, "RMSE" = rmse12, "MAE" = mae12, "scaled MSE" = sMSE12)
+results12
+```
+
+monthly data with DJIA
+```{r djia monthly, echo=FALSE}
+temp4 <- data1
+temp4 <- temp4[,-c(1,6,8,10,12,14:20,22:27)]
+indices <- seq(from = 1, to = 681, by = 3)
+for (i in indices) {
+  difference <- temp4$MeanHousePrice[i+3]-temp4$MeanHousePrice[i]
+  temp4$MeanHousePrice[i+1] <- temp4$MeanHousePrice[i] + difference/3
+  temp4$MeanHousePrice[i+2] <- temp4$MeanHousePrice[i] + 2*difference/3
+}
+temp4 <- temp4[265:682,]
+```
+
+monthly LASSO with DJIA
+```{r monthly LASSO DJIA, echo=FALSE}
+temp4$GoldPriceChange <- as.numeric(temp4$GoldPriceChange)
+temp4$SP500ClosingChange <- as.numeric(temp4$SP500ClosingChange)
+temp4$DJIA_closingChange <- as.numeric(temp4$DJIA_closingChange)
+nonlinearRHS4 <- poly(as.matrix(temp4[,-12]), degree = 3, raw = TRUE)
+set.seed(420)
+xTrain3 <- nonlinearRHS4[1:361,]
+yTrain3 <- FutureInflation[265:625]
+CV4 <- cv.glmnet(x = xTrain3, y = yTrain3, type.measure = "default", alpha = 1,nlambda = 100)
+lambda_best4 <- CV4$lambda.min 
+lasso_model4 <- glmnet(xTrain3, yTrain3, alpha = 1, lambda = lambda_best4, standardize = TRUE)
+lassoPredFutureInflation4 <- coef(lasso_model4)[1] +  coef(lasso_model4)[66]*nonlinearRHS4[362:nrow(nonlinearRHS4),65]+
+coef(lasso_model4)[111]*nonlinearRHS4[362:nrow(nonlinearRHS4),110]+
+coef(lasso_model4)[112]*nonlinearRHS4[362:nrow(nonlinearRHS4),111]+  coef(lasso_model4)[118]*nonlinearRHS4[362:nrow(nonlinearRHS4),117]+ coef(lasso_model4)[119]*nonlinearRHS4[362:nrow(nonlinearRHS4),118]
+lassoPredFutureInflation4 <- lassoPredFutureInflation4[is.na(lassoPredFutureInflation4) == FALSE]
+predDiff13 <- FutureInflation[626:length(FutureInflation)] - lassoPredFutureInflation4
+predDiff13 <- predDiff13[is.na(predDiff13) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency with DJI LASSO", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], lassoPredFutureInflation4, pch = 8, col = "red")
+mse13 <- sum(predDiff13^2)/57
+rmse13 <- sqrt(mse13)
+mae13 <- sum(abs(predDiff13))/57
+sMSE13 <- mean(predDiff13^2)/var(FutureInflation[626:length(FutureInflation)])
+results13 <- c("MSE" = mse13, "RMSE" = rmse13, "MAE" = mae13, "scaled MSE" = sMSE13)
+results13
+```
+
+monthly Random Forest with DJIA
+```{r monthly random forest djia, echo=FALSE}
+set.seed(420)
+trainingData4 <- temp4[1:361,]
+testingData4 <- temp4[362:nrow(temp4),]
+rf4 <- randomForest(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + GoldPriceChange + SP500ClosingChange + DJIA_closingChange, data = trainingData4, mty = 1, na.action = na.omit)
+monthlyRFdjia <- predict(rf4, newdata = testingData4, type = "response")
+monthlyRFdjia <- as.numeric(monthlyRFdjia)
+predDiff14 <- FutureInflation[626:length(FutureInflation)] - monthlyRFdjia
+predDiff14 <- predDiff14[is.na(predDiff10) == FALSE]
+plot(dates[626:length(FutureInflation)],FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency with DJI Random Forest", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyRFdjia, pch = 8, col = "red")
+mse14 <- sum(predDiff14^2)/57
+rmse14 <- sqrt(mse14)
+mae14 <- sum(abs(predDiff14))/57
+sMSE14 <- mean(predDiff14^2)/var(FutureInflation[626:length(FutureInflation)])
+results14 <- c("MSE" = mse14, "RMSE" = rmse14, "MAE" = mae14, "scaled MSE" = sMSE14)
+results14
+```
+
+
+monthly Neural Network with DJIA
+```{r monthly neural network djia, echo=FALSE}
+set.seed(420)
+trainingData4 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange + DJIA_closingChange, data = trainingData4)
+testingData4 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange + DJIA_closingChange, data = testingData4)
+ANN4 <- neuralnet(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + GoldPriceChange + SP500ClosingChange + DJIA_closingChange, hidden = 6, data = trainingData4)
+monthlyNeuraldjia <- compute(ANN4, testingData4[,c("CurrentInflation", "YieldDifference", "UNRATENSA", "GoldPriceChange", "SP500ClosingChange", "DJIA_closingChange")])
+predDiff15 <- FutureInflation[626:length(FutureInflation)] - monthlyNeuraldjia$net.result
+predDiff15 <- predDiff15[is.na(predDiff15) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency with DJI Neural Network", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyNeuraldjia$net.result, pch = 8, col = "red")
+mse15 <- sum(predDiff15^2)/57
+rmse15 <- sqrt(mse15)
+mae15 <- sum(abs(predDiff15))/57
+sMSE15 <- mean(predDiff15^2)/var(FutureInflation[626:length(FutureInflation)])
+results15 <- c("MSE" = mse15, "RMSE" = rmse15, "MAE" = mae15, "scaled MSE" = sMSE15)
+results15
+```
+
+monthly super learner with DJIA
+```{r monthly super learner djia, echo=FALSE}
+data5 <- as.data.frame(testingData4)
+data5$LASSO <- as.numeric(lassoPredFutureInflation4)
+data5$RF <- as.numeric(monthlyRFdjia)
+data5$NN <- as.numeric(monthlyNeuraldjia$net.result)
+fourthSuperLearnerTest <- data5
+fourthSuper <- lm(FutureInflation ~ LASSO + RF, data = fourthSuperLearnerTest, na.action = na.omit)
+fourthSuperSum <- summary(fourthSuper)
+fourthSuperResult <- fourthSuperSum$coefficient[1,1] + fourthSuperSum$coefficient[2,1] * fourthSuperLearnerTest$LASSO + fourthSuperSum$coefficient[3,1] * fourthSuperLearnerTest$RF 
+predDiff16 <- FutureInflation[626:length(FutureInflation)] - fourthSuperResult
+plot(dates[626:length(dates)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+    Super Learner with DJIA", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(dates)], fourthSuperResult, pch = 8, col = "red")
+mse16 <- sum(predDiff16^2)/57
+rmse16 <- sqrt(mse16)
+mae16 <- sum(abs(predDiff16))/57
+sMSE16 <- mean(predDiff16^2)/var(FutureInflation[626:length(FutureInflation)])
+results16 <- c("MSE" = mse16, "RMSE" = rmse16, "MAE" = mae16, "scaled MSE" = sMSE16)
+results16
+```
+
+monthly data without DJIA after 1985
+```{r monthly data without DJIA, echo=FALSE}
+temp5 <- temp4
+temp5$DJIA_closingChange <- NULL
+```
+
+monthly LASSO without DJIA after 1985
+```{r monthly LASSO no DJIA 1985, echo=FALSE}
+temp5$GoldPriceChange <- as.numeric(temp4$GoldPriceChange)
+temp5$SP500ClosingChange <- as.numeric(temp4$SP500ClosingChange)
+temp5$DJIA_closingChange <- as.numeric(temp4$DJIA_closingChange)
+nonlinearRHS5 <- poly(as.matrix(temp5[,-11]), degree = 3, raw = TRUE)
+set.seed(420)
+xTrain4 <- nonlinearRHS5[1:361,]
+yTrain4 <- FutureInflation[265:625]
+CV5 <- cv.glmnet(x = xTrain4, y = yTrain4, type.measure = "default", alpha = 1,nlambda = 100)
+lambda_best5 <- CV5$lambda.min 
+lasso_model5 <- glmnet(xTrain4, yTrain4, alpha = 1, lambda = lambda_best5, standardize = TRUE)
+lassoPredFutureInflation5 <- coef(lasso_model5)[1]*rep(1,57) 
+predDiff17 <- FutureInflation[626:length(FutureInflation)] - lassoPredFutureInflation5
+predDiff17 <- predDiff17[is.na(predDiff17) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency without DJI LASSO after 1985", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], lassoPredFutureInflation5, pch = 8, col = "red")
+mse17 <- sum(predDiff17^2)/57
+rmse17 <- sqrt(mse17)
+mae17 <- sum(abs(predDiff17))/57
+sMSE17 <- mean(predDiff17^2)/var(FutureInflation[626:length(FutureInflation)])
+results17 <- c("MSE" = mse17, "RMSE" = rmse17, "MAE" = mae17, "scaled MSE" = sMSE17)
+results17
+```
+
+monthly Random Forest without DJIA after 1985
+```{r monthly random forest no DJIA 1985, echo=FALSE}
+set.seed(420)
+trainingData5 <- temp5[1:361,]
+testingData5 <- temp5[362:nrow(temp5),]
+rf5 <- randomForest(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + GoldPriceChange + SP500ClosingChange, data = trainingData5, mty = 1, na.action = na.omit)
+monthlyRF1985 <- predict(rf5, newdata = testingData5, type = "response")
+monthlyRF1985 <- as.numeric(monthlyRF1985)
+predDiff18 <- FutureInflation[626:length(FutureInflation)] - monthlyRF1985
+predDiff18 <- predDiff18[is.na(predDiff18) == FALSE]
+plot(dates[626:length(FutureInflation)],FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency without DJIA Random Forest 1985", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyRF1985, pch = 8, col = "red")
+mse18 <- sum(predDiff18^2)/57
+rmse18 <- sqrt(mse18)
+mae18 <- sum(abs(predDiff18))/57
+sMSE18 <- mean(predDiff18^2)/var(FutureInflation[626:length(FutureInflation)])
+results18 <- c("MSE" = mse18, "RMSE" = rmse18, "MAE" = mae18, "scaled MSE" = sMSE18)
+results18
+```
+
+monthly Neural Network without DJIA after 1985
+```{r monthly neural network without djia 1985, echo=FALSE}
+set.seed(420)
+trainingData5 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange, data = trainingData5)
+testingData5 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange, data = testingData5)
+ANN5 <- neuralnet(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + GoldPriceChange + SP500ClosingChange, hidden = 6, data = trainingData5)
+monthlyNeural1985 <- compute(ANN5, testingData5[,c("CurrentInflation", "YieldDifference", "UNRATENSA", "GoldPriceChange", "SP500ClosingChange")])
+predDiff19 <- FutureInflation[626:length(FutureInflation)] - monthlyNeural1985$net.result
+predDiff19 <- predDiff19[is.na(predDiff19) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency without DJI Neural Network after 1985", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyNeural1985$net.result, pch = 8, col = "red")
+mse19 <- sum(predDiff19^2)/57
+rmse19 <- sqrt(mse19)
+mae19 <- sum(abs(predDiff19))/57
+sMSE19 <- mean(predDiff19^2)/var(FutureInflation[626:length(FutureInflation)])
+results19 <- c("MSE" = mse19, "RMSE" = rmse19, "MAE" = mae19, "scaled MSE" = sMSE19)
+results19
+```
+
+monthly super learner without DJIA after 1985
+```{r monthly super learner wihtout djia 1985, echo=FALSE}
+data6 <- as.data.frame(testingData5)
+data6$LASSO <- as.numeric(lassoPredFutureInflation5)
+data6$RF <- as.numeric(monthlyRF1985)
+data6$NN <- as.numeric(monthlyNeural1985$net.result)
+fifthSuperLearnerTest <- data6
+fifthSuper <- lm(FutureInflation ~ LASSO + RF + NN, data = fifthSuperLearnerTest, na.action = na.omit)
+fifthSuperSum <- summary(fifthSuper)
+fifthSuperResult <- fifthSuperSum$coefficient[1,1] + fifthSuperSum$coefficient[2,1] * fifthSuperLearnerTest$LASSO + fifthSuperSum$coefficient[3,1] * fifthSuperLearnerTest$RF 
+predDiff20 <- FutureInflation[626:length(FutureInflation)] - fifthSuperResult
+plot(dates[626:length(dates)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+    Super Learner without DJIA 1985", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(dates)], fifthSuperResult, pch = 8, col = "red")
+mse20 <- sum(predDiff20^2)/57
+rmse20 <- sqrt(mse20)
+mae20 <- sum(abs(predDiff20))/57
+sMSE20 <- mean(predDiff20^2)/var(FutureInflation[626:length(FutureInflation)])
+results20 <- c("MSE" = mse20, "RMSE" = rmse20, "MAE" = mae20, "scaled MSE" = sMSE20)
+results20
+```
+
+monthly data after 1990 with DJIA
+```{r monthly data with DJIA 1990, echo=FALSE}
+temp6 <- temp5[-c(1:60),]
+```
+
+monthly LASSO without DJIA after 1990
+```{r monthly LASSO without DJIA 1990, echo=FALSE}
+temp6$GoldPriceChange <- as.numeric(temp6$GoldPriceChange)
+temp6$SP500ClosingChange <- as.numeric(temp6$SP500ClosingChange)
+temp6$DJIA_closingChange <- as.numeric(temp6$DJIA_closingChange)
+nonlinearRHS6 <- poly(as.matrix(temp4[,-11]), degree = 3, raw = TRUE)
+set.seed(420)
+xTrain5 <- nonlinearRHS6[1:301,]
+yTrain5 <- FutureInflation[265:565]
+CV6 <- cv.glmnet(x = xTrain5, y = yTrain5, type.measure = "default", alpha = 1,nlambda = 100)
+lambda_best6 <- CV6$lambda.min 
+lasso_model6 <- glmnet(xTrain5, yTrain5, alpha = 1, lambda = lambda_best6, standardize = TRUE)
+lassoPredFutureInflation6 <- coef(lasso_model6)[1] +  coef(lasso_model6)[287]*nonlinearRHS4[362:nrow(nonlinearRHS6),286]
+lassoPredFutureInflation6 <- lassoPredFutureInflation6[is.na(lassoPredFutureInflation6) == FALSE]
+predDiff21 <- FutureInflation[626:length(FutureInflation)] - lassoPredFutureInflation6
+predDiff21 <- predDiff21[is.na(predDiff21) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency without DJI LASSO 1990", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue", ylim = c(-2,4))
+points(dates[626:length(FutureInflation)], lassoPredFutureInflation6, pch = 8, col = "red")
+mse21 <- sum(predDiff21^2)/57
+rmse21 <- sqrt(mse21)
+mae21 <- sum(abs(predDiff21))/57
+sMSE21 <- mean(predDiff21^2)/var(FutureInflation[626:length(FutureInflation)])
+results21 <- c("MSE" = mse21, "RMSE" = rmse21, "MAE" = mae21, "scaled MSE" = sMSE21)
+results21
+```
+
+monthly Random Forest without DJIA after 1990
+```{r monthly random forest without DJIA 1990, echo=FALSE}
+set.seed(420)
+trainingData6 <- temp6[1:301,]
+testingData6 <- temp6[302:nrow(temp6),]
+rf6 <- randomForest(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + GoldPriceChange + SP500ClosingChange, data = trainingData6, mty = 1, na.action = na.omit)
+monthlyRFdjia1990 <- predict(rf6, newdata = testingData6, type = "response")
+monthlyRFdjia1990 <- as.numeric(monthlyRFdjia1990)
+predDiff22 <- FutureInflation[626:length(FutureInflation)] - monthlyRFdjia1990
+predDiff22 <- predDiff22[is.na(predDiff22) == FALSE]
+plot(dates[626:length(FutureInflation)],FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency without DJIA Random Forest 1990", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyRFdjia1990, pch = 8, col = "red")
+mse22 <- sum(predDiff22^2)/57
+rmse22 <- sqrt(mse22)
+mae22 <- sum(abs(predDiff22))/57
+sMSE22 <- mean(predDiff22^2)/var(FutureInflation[626:length(FutureInflation)])
+results22 <- c("MSE" = mse22, "RMSE" = rmse22, "MAE" = mae22, "scaled MSE" = sMSE22)
+results22
+```
+
+monthly Neural Network without DJIA 1990
+```{r monthly neural network without djia 1990, echo=FALSE}
+set.seed(420)
+trainingData6 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange, data = trainingData6)
+testingData6 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange, data = testingData6)
+ANN6 <- neuralnet(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + GoldPriceChange + SP500ClosingChange, hidden = 6, data = trainingData6)
+monthlyNeuraldjia1990 <- compute(ANN6, testingData6[,c("CurrentInflation", "YieldDifference", "UNRATENSA", "GoldPriceChange", "SP500ClosingChange")])
+predDiff23 <- FutureInflation[626:length(FutureInflation)] - monthlyNeuraldjia1990$net.result
+predDiff23 <- predDiff23[is.na(predDiff23) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency without DJI Neural Network 1990", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyNeuraldjia1990$net.result, pch = 8, col = "red")
+mse23 <- sum(predDiff23^2)/57
+rmse23 <- sqrt(mse23)
+mae23 <- sum(abs(predDiff23))/57
+sMSE23 <- mean(predDiff23^2)/var(FutureInflation[626:length(FutureInflation)])
+results23 <- c("MSE" = mse23, "RMSE" = rmse23, "MAE" = mae23, "scaled MSE" = sMSE23)
+results23
+```
+
+monthly super learner without DJIA after 1990
+```{r monthly super learner without djia 1990, echo=FALSE}
+data7 <- as.data.frame(testingData6)
+data7$LASSO <- as.numeric(lassoPredFutureInflation6)
+data7$RF <- as.numeric(monthlyRFdjia1990)
+data7$NN <- as.numeric(monthlyNeuraldjia1990$net.result)
+sixthSuperLearnerTrainer <- data7
+sixthSuper <- lm(FutureInflation ~ LASSO + RF + NN, data = sixthSuperLearnerTrainer, na.action = na.omit)
+sixthSuperSum <- summary(sixthSuper)
+sixthSuperResult <- sixthSuperSum$coefficient[1,1] + sixthSuperSum$coefficient[2,1] * sixthSuperLearnerTrainer$LASSO + sixthSuperSum$coefficient[3,1] * sixthSuperLearnerTrainer$RF + sixthSuperSum$coefficient[4,1] * sixthSuperLearnerTrainer$NN
+predDiff24 <- FutureInflation[626:length(FutureInflation)] - sixthSuperResult
+plot(dates[626:length(dates)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+    Super Learner without DJIA 1990", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(dates)], sixthSuperResult, pch = 8, col = "red")
+mse24 <- sum(predDiff24^2)/57
+rmse24 <- sqrt(mse24)
+mae24 <- sum(abs(predDiff24))/57
+sMSE24 <- mean(predDiff24^2)/var(FutureInflation[626:length(FutureInflation)])
+results24 <- c("MSE" = mse24, "RMSE" = rmse24, "MAE" = mae24, "scaled MSE" = sMSE24)
+results24
+```
+
+monthly data after 1990 with DJIA
+```{r montly data with DJIA 1990, echo=FALSE}
+temp7 <- temp4[-c(1:60),]
+```
+
+monthly LASSO with DJIA after 1990
+```{r monthly LASSO DJIA 1990 1, echo=FALSE}
+temp7$GoldPriceChange <- as.numeric(temp6$GoldPriceChange)
+temp7$SP500ClosingChange <- as.numeric(temp6$SP500ClosingChange)
+temp7$DJIA_closingChange <- as.numeric(temp6$DJIA_closingChange)
+nonlinearRHS7 <- poly(as.matrix(temp7[,-11]), degree = 3, raw = TRUE)
+set.seed(420)
+xTrain6 <- nonlinearRHS7[1:301,]
+yTrain6 <- FutureInflation[265:565]
+CV7 <- cv.glmnet(x = xTrain6, y = yTrain6, type.measure = "default", alpha = 1,nlambda = 100)
+lambda_best7 <- CV7$lambda.min 
+lasso_model7 <- glmnet(xTrain6, yTrain6, alpha = 1, lambda = lambda_best7, standardize = TRUE)
+lassoPredFutureInflation7 <- coef(lasso_model6)[1] +  coef(lasso_model7)[4]*nonlinearRHS4[362:nrow(nonlinearRHS6),3] +  coef(lasso_model7)[23]*nonlinearRHS4[362:nrow(nonlinearRHS6),22] +  coef(lasso_model7)[162]*nonlinearRHS4[362:nrow(nonlinearRHS6),161] +  coef(lasso_model7)[232]*nonlinearRHS4[362:nrow(nonlinearRHS6),231] +  coef(lasso_model7)[235]*nonlinearRHS4[362:nrow(nonlinearRHS6),234] +  coef(lasso_model7)[338]*nonlinearRHS4[362:nrow(nonlinearRHS6),337]
+lassoPredFutureInflation7 <- lassoPredFutureInflation7[is.na(lassoPredFutureInflation7) == FALSE]
+predDiff25 <- FutureInflation[626:length(FutureInflation)] - lassoPredFutureInflation7
+predDiff25 <- predDiff21[is.na(predDiff21) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency with DJI LASSO 1990", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], lassoPredFutureInflation7, pch = 8, col = "red")
+mse25 <- sum(predDiff25^2)/57
+rmse25 <- sqrt(mse25)
+mae25 <- sum(abs(predDiff25))/57
+sMSE25 <- mean(predDiff25^2)/var(FutureInflation[626:length(FutureInflation)])
+results25 <- c("MSE" = mse25, "RMSE" = rmse25, "MAE" = mae25, "scaled MSE" = sMSE25)
+results25
+```
+
+monthly Random Forest with DJIA after 1990
+```{r monthly random forest DJIA 1990, echo=FALSE}
+set.seed(420)
+trainingData7 <- temp7[1:301,]
+testingData7 <- temp7[302:nrow(temp6),]
+rf7 <- randomForest(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + GoldPriceChange + SP500ClosingChange + DJIA_closingChange, data = trainingData7, mty = 1, na.action = na.omit)
+monthlyRF1990 <- predict(rf7, newdata = testingData7, type = "response")
+monthlyRF1990 <- as.numeric(monthlyRF1990)
+predDiff26 <- FutureInflation[626:length(FutureInflation)] - monthlyRFdjia1990
+predDiff26 <- predDiff26[is.na(predDiff26) == FALSE]
+plot(dates[626:length(FutureInflation)],FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency with DJIA Random Forest 1990", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyRF1990, pch = 8, col = "red")
+mse26 <- sum(predDiff26^2)/57
+rmse26 <- sqrt(mse26)
+mae26 <- sum(abs(predDiff26))/57
+sMSE26 <- mean(predDiff26^2)/var(FutureInflation[626:length(FutureInflation)])
+results26 <- c("MSE" = mse26, "RMSE" = rmse26, "MAE" = mae26, "scaled MSE" = sMSE26)
+results26
+```
+
+monthly Neural Network with DJIA 1990
+```{r monthly neural network djia 1990, echo=FALSE}
+set.seed(420)
+trainingData7 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange + DJIA_closingChange, data = trainingData7)
+testingData7 <- model.matrix(~FutureInflation + CurrentInflation + YieldDifference + UNRATENSA+ TB6MS + TB3MS + GoldPriceChange + SP500ClosingChange + DJIA_closingChange, data = testingData7)
+ANN7 <- neuralnet(FutureInflation ~ CurrentInflation + YieldDifference + UNRATENSA + GoldPriceChange + SP500ClosingChange + DJIA_closingChange, hidden = 6, data = trainingData7)
+monthlyNeural1990 <- compute(ANN7, testingData7[,c("CurrentInflation", "YieldDifference", "UNRATENSA", "GoldPriceChange", "SP500ClosingChange", "DJIA_closingChange")])
+predDiff27 <- FutureInflation[626:length(FutureInflation)] - monthlyNeural1990$net.result
+predDiff27 <- predDiff27[is.na(predDiff27) == FALSE]
+plot(dates[626:length(FutureInflation)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+Frequency with DJI Neural Network 1990", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(FutureInflation)], monthlyNeuraldjia1990$net.result, pch = 8, col = "red")
+mse27 <- sum(predDiff27^2)/57
+rmse27 <- sqrt(mse27)
+mae27 <- sum(abs(predDiff27))/57
+sMSE27 <- mean(predDiff27^2)/var(FutureInflation[626:length(FutureInflation)])
+results27 <- c("MSE" = mse27, "RMSE" = rmse27, "MAE" = mae27, "scaled MSE" = sMSE27)
+results27
+```
+
+monthly super learner with DJIA after 1990
+```{r monthly super learner wiht djia 1990, echo=FALSE}
+data7 <- as.data.frame(testingData7)
+data7$LASSO <- as.numeric(lassoPredFutureInflation7)
+data7$RF <- as.numeric(monthlyRF1990)
+data7$NN <- as.numeric(monthlyNeural1990$net.result)
+seventhSuperLearnerTrainer <- data7
+seventhSuper <- lm(FutureInflation ~ LASSO + RF + NN, data = seventhSuperLearnerTrainer, na.action = na.omit)
+seventhSuperSum <- summary(seventhSuper)
+seventhSuperResult <- seventhSuperSum$coefficient[1,1] + seventhSuperSum$coefficient[2,1] * seventhSuperLearnerTrainer$LASSO + seventhSuperSum$coefficient[3,1] * seventhSuperLearnerTrainer$RF  
+predDiff28 <- FutureInflation[626:length(FutureInflation)] - seventhSuperResult
+plot(dates[626:length(dates)], FutureInflation[626:length(FutureInflation)], main = "Predicted VS Actual Inflation Monthly 
+    Super Learner without DJIA 1990", xlab = "Dates", ylab= "Inflation", pch = 0, col = "blue")
+points(dates[626:length(dates)], seventhSuperResult, pch = 8, col = "red")
+mse28 <- sum(predDiff28^2)/57
+rmse28 <- sqrt(mse28)
+mae28 <- sum(abs(predDiff28))/57
+sMSE28 <- mean(predDiff28^2)/var(FutureInflation[626:length(FutureInflation)])
+results28 <- c("MSE" = mse28, "RMSE" = rmse28, "MAE" = mae28, "scaled MSE" = sMSE28)
+results28
+```
+
+summary results
+```{r summary results, echo=FALSE}
+result <- rbind(results5,results6,results7, results8, results9,results10,results11,results12,results13,results14,results15,results16,results17,results18,results19,results20,results21,results22,results23,results24,results25,results26,results27,results28)
+result <- as.data.frame(result)
+rname <- c("Quarterly Lasso No DJIA", "Quarterly Random Forest NO DJIA", "Quarterly Neural Network NO DJIA", "Quarterly SUper Learner NO DJIA",  "Monthly Lasso No DJIA", "Monthly Random Forest No DJIA", "Monthly Neural Network No DJIA", "Monthly Super Learner No DJIA", "Monthly Lasso With DJIA", "Monthly Random Forest With DJIA", "Monthly Neural Network With DJIA", "Monthly Super Learner With DJIA", "Monthly Lasso Without DJIA After 1985", "Monthly Random Forest Without DJIA after 1985", "Monthly Neural Network Without DJIA after 1985", "Monthly Super Learner Without DJIA after 1985", "Monthly Lasso Without DJIA After 1990", "Monthly Random Forest Without DJIA After 1990", "Monthly Neural Network Without DJIA After 1990", "Monthly Super Learner Without DJIA After 1990", "Monthly Lasso With DJIA After 1990", "Monthly Random Forest With DJIA After 1990", "Monthly Neural Network With DJIA After 1990", "Monthly Super Learner With DJIA After 1990")
+rownames(result) <- rname
+result
+```
